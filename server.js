@@ -34,8 +34,7 @@ const userSchema = new mongoose.Schema({
     email: { type: String, required: true, unique: true, lowercase: true },
     password: { type: String, required: true }, 
     role: { type: String, default: 'user' },
-    profilePic: { type: String, default: '' },
-    posts: { type: Array, default: [] }
+    profilePic: { type: String, default: '' }
 });
 const User = mongoose.model('User', userSchema);
 
@@ -59,16 +58,24 @@ const postSchema = new mongoose.Schema({
 });
 const Post = mongoose.model('Post', postSchema);
 
+const blacklistSchema = new mongoose.Schema({
+    email: { type: String, required: true, unique: true, lowercase: true },
+    bannedAt: { type: Date, default: Date.now }
+});
+const Blacklist = mongoose.model('Blacklist', blacklistSchema);
+
 // --- ROUTES ---
 
-app.get('/', (req, res) => res.send("The Expose Backend is running!"));
-
-// 1. SIGNUP & LOGIN
+// 1. AUTHENTICATION
 app.post('/api/signup', async (req, res) => {
     try {
         const { username, email, password } = req.body;
+        const isBanned = await Blacklist.findOne({ email: email.toLowerCase() });
+        if (isBanned) return res.status(403).json({ message: "This email is blacklisted." });
+
         const existingUser = await User.findOne({ $or: [{ email: email.toLowerCase() }, { username }] });
         if (existingUser) return res.status(400).json({ message: "Username or Email already exists." });
+        
         const newUser = new User({ username, email, password });
         await newUser.save();
         const { password: _, ...userData } = newUser._doc;
@@ -90,88 +97,85 @@ app.post('/api/login', async (req, res) => {
     }
 });
 
-// 2. POSTS (GET & CREATE)
+// 2. USER MANAGEMENT
+app.get('/api/users', async (req, res) => {
+    const users = await User.find({}, '-password');
+    res.json(users);
+});
+
+app.put('/api/users/:id/role', async (req, res) => {
+    const { role } = req.body;
+    const user = await User.findByIdAndUpdate(req.params.id, { role }, { new: true });
+    res.json(user);
+});
+
+// 3. POSTS (CRUD)
 app.get('/api/posts', async (req, res) => {
-    try {
-        const posts = await Post.find().sort({ createdAt: -1 });
-        res.json(posts);
-    } catch (err) {
-        res.status(500).json({ error: "Failed to fetch posts" });
-    }
+    const posts = await Post.find().sort({ createdAt: -1 });
+    res.json(posts);
 });
 
 app.post('/api/posts', async (req, res) => {
-    try {
-        const newPost = new Post(req.body);
-        const savedPost = await newPost.save();
-        res.status(201).json(savedPost);
-    } catch (err) {
-        res.status(400).json({ error: err.message });
-    }
+    const newPost = new Post(req.body);
+    await newPost.save();
+    res.status(201).json(newPost);
 });
 
-// 3. VOTING (UP/DOWN)
+app.put('/api/posts/:id', async (req, res) => {
+    const post = await Post.findByIdAndUpdate(req.params.id, { content: req.body.content }, { new: true });
+    res.json(post);
+});
+
+app.delete('/api/posts/:id', async (req, res) => {
+    await Post.findByIdAndDelete(req.params.id);
+    res.json({ message: "Deleted" });
+});
+
+// 4. VOTING & COMMENTS
 app.post('/api/posts/:id/vote', async (req, res) => {
-    try {
-        const { username, voteType } = req.body;
-        const post = await Post.findById(req.params.id);
-        if (!post) return res.status(404).json({ message: "Post not found" });
-
-        if (voteType === 'up') {
-            if (post.ups.includes(username)) {
-                post.ups = post.ups.filter(u => u !== username);
-            } else {
-                post.ups.push(username);
-                post.downs = post.downs.filter(u => u !== username);
-            }
-        } else {
-            if (post.downs.includes(username)) {
-                post.downs = post.downs.filter(u => u !== username);
-            } else {
-                post.downs.push(username);
-                post.ups = post.ups.filter(u => u !== username);
-            }
-        }
-        await post.save();
-        res.json(post);
-    } catch (err) {
-        res.status(400).json({ error: err.message });
+    const { username, voteType } = req.body;
+    const post = await Post.findById(req.params.id);
+    if (voteType === 'up') {
+        post.ups = post.ups.includes(username) ? post.ups.filter(u => u !== username) : [...post.ups, username];
+        post.downs = post.downs.filter(u => u !== username);
+    } else {
+        post.downs = post.downs.includes(username) ? post.downs.filter(u => u !== username) : [...post.downs, username];
+        post.ups = post.ups.filter(u => u !== username);
     }
+    await post.save();
+    res.json(post);
 });
 
-// 4. COMMENTS & COMMENT LIKES
 app.post('/api/posts/:id/comment', async (req, res) => {
-    try {
-        const { username, text } = req.body;
-        const post = await Post.findById(req.params.id);
-        if (!post) return res.status(404).json({ message: "Post not found" });
-        post.comments.push({ username, text, likes: [] });
-        await post.save();
-        res.status(201).json(post);
-    } catch (err) {
-        res.status(400).json({ error: err.message });
-    }
+    const post = await Post.findById(req.params.id);
+    post.comments.push({ username: req.body.username, text: req.body.text });
+    await post.save();
+    res.json(post);
 });
 
-app.post('/api/posts/:id/comment/:index/like', async (req, res) => {
-    try {
-        const { username } = req.body;
-        const post = await Post.findById(req.params.id);
-        if (!post) return res.status(404).json({ message: "Post not found" });
-        const comment = post.comments[req.params.index];
-        if (!comment) return res.status(404).json({ message: "Comment not found" });
+app.delete('/api/posts/:id/comment/:index', async (req, res) => {
+    const post = await Post.findById(req.params.id);
+    post.comments.splice(req.params.index, 1);
+    await post.save();
+    res.json(post);
+});
 
-        const likeIndex = comment.likes.indexOf(username);
-        if (likeIndex === -1) {
-            comment.likes.push(username);
-        } else {
-            comment.likes.splice(likeIndex, 1);
-        }
-        await post.save();
-        res.json(post);
-    } catch (err) {
-        res.status(400).json({ error: err.message });
-    }
+// 5. BLACKLIST
+app.get('/api/blacklist', async (req, res) => {
+    const list = await Blacklist.find();
+    res.json(list);
+});
+
+app.post('/api/blacklist', async (req, res) => {
+    const { email, userId } = req.body;
+    await Blacklist.create({ email });
+    if (userId) await User.findByIdAndDelete(userId);
+    res.status(201).json({ message: "Banned" });
+});
+
+app.delete('/api/blacklist/:email', async (req, res) => {
+    await Blacklist.findOneAndDelete({ email: req.params.email });
+    res.json({ message: "Unbanned" });
 });
 
 const PORT = process.env.PORT || 10000;
