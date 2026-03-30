@@ -46,6 +46,7 @@ const postSchema = new mongoose.Schema({
       {
         username: String,
         text: String,
+        likes: { type: Array, default: [] }, // FIX: Added likes array to individual comments
         createdAt: { type: Date, default: Date.now }
       }
     ]
@@ -86,21 +87,18 @@ app.post('/api/signup', async (req, res) => {
 app.post('/api/login', async (req, res) => {
     try {
         const { email, password } = req.body;
-        // Search by lowercase email
         const user = await User.findOne({ email: email.toLowerCase() });
         
         if (!user) {
             return res.status(401).json({ message: "Invalid email or user not found." });
         }
 
-        // Compare hashed password
         const isMatch = await bcrypt.compare(password, user.password);
         if (!isMatch) {
             return res.status(401).json({ message: "Incorrect password." });
         }
 
         const { password: _, ...userData } = user._doc;
-        // Send back both formats of ID to prevent frontend crashes
         res.json({ ...userData, id: user._id });
     } catch (err) {
         res.status(500).json({ message: "Server error during login." });
@@ -195,7 +193,8 @@ app.post('/api/posts/:id/vote', async (req, res) => {
 
 app.post('/api/posts/:id/comment', async (req, res) => {
     const post = await Post.findById(req.params.id);
-    post.comments.push({ username: req.body.username, text: req.body.text });
+    // FIX: Ensure new comments start with an empty likes array
+    post.comments.push({ username: req.body.username, text: req.body.text, likes: [] });
     await post.save();
     res.json(post);
 });
@@ -205,6 +204,29 @@ app.delete('/api/posts/:id/comment/:index', async (req, res) => {
     post.comments.splice(req.params.index, 1);
     await post.save();
     res.json(post);
+});
+
+// FIX: New Route for Comment Likes
+app.post('/api/posts/:id/comment/:index/like', async (req, res) => {
+    try {
+        const { username } = req.body;
+        const post = await Post.findById(req.params.id);
+        if (!post) return res.status(404).send();
+
+        const comment = post.comments[req.params.index];
+        if (!comment.likes) comment.likes = [];
+
+        if (comment.likes.includes(username)) {
+            comment.likes = comment.likes.filter(u => u !== username);
+        } else {
+            comment.likes.push(username);
+        }
+
+        await post.save();
+        res.json(post);
+    } catch (err) {
+        res.status(500).json({ error: "Failed to like comment" });
+    }
 });
 
 // 5. BLACKLIST
