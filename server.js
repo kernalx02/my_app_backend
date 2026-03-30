@@ -60,7 +60,7 @@ const Blacklist = mongoose.model('Blacklist', blacklistSchema);
 
 // --- ROUTES ---
 
-// 1. AUTHENTICATION
+// 1. AUTHENTICATION (Signup & Login)
 app.post('/api/signup', async (req, res) => {
     try {
         const { username, email, password } = req.body;
@@ -77,7 +77,7 @@ app.post('/api/signup', async (req, res) => {
         await newUser.save();
         
         const { password: _, ...userData } = newUser._doc;
-        res.status(201).json(userData);
+        res.status(201).json({ ...userData, id: newUser._id });
     } catch (err) {
         res.status(500).json({ message: "Error creating account." });
     }
@@ -86,14 +86,22 @@ app.post('/api/signup', async (req, res) => {
 app.post('/api/login', async (req, res) => {
     try {
         const { email, password } = req.body;
+        // Search by lowercase email
         const user = await User.findOne({ email: email.toLowerCase() });
-        if (!user) return res.status(401).json({ message: "Invalid credentials." });
+        
+        if (!user) {
+            return res.status(401).json({ message: "Invalid email or user not found." });
+        }
 
+        // Compare hashed password
         const isMatch = await bcrypt.compare(password, user.password);
-        if (!isMatch) return res.status(401).json({ message: "Invalid credentials." });
+        if (!isMatch) {
+            return res.status(401).json({ message: "Incorrect password." });
+        }
 
         const { password: _, ...userData } = user._doc;
-        res.json(userData);
+        // Send back both formats of ID to prevent frontend crashes
+        res.json({ ...userData, id: user._id });
     } catch (err) {
         res.status(500).json({ message: "Server error during login." });
     }
@@ -114,12 +122,9 @@ app.get('/api/users', async (req, res) => {
     res.json(users);
 });
 
-// --- NEW PROFILE UPDATE ROUTE ---
 app.put('/api/users/:id', async (req, res) => {
     try {
         const { username, profilePic } = req.body;
-        
-        // Ensure username isn't taken by someone else
         const existing = await User.findOne({ username, _id: { $ne: req.params.id } });
         if (existing) return res.status(400).json({ message: "Username taken by another member." });
 
@@ -129,7 +134,7 @@ app.put('/api/users/:id', async (req, res) => {
             { new: true }
         ).select('-password');
 
-        res.json(updatedUser);
+        res.json({ ...updatedUser._doc, id: updatedUser._id });
     } catch (err) {
         res.status(500).json({ message: "Server error during update." });
     }
