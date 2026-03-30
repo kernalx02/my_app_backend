@@ -1,6 +1,7 @@
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
+const bcrypt = require('bcryptjs'); // Better security for passwords
 require('dotenv').config();
 
 const app = express();
@@ -16,17 +17,12 @@ app.use(cors({
 }));
 
 // --- DATABASE CONNECTION ---
-const connectDB = async () => {
-    try {
-        console.log("⏳ Attempting to bridge to MongoDB Atlas...");
-        await mongoose.connect(process.env.MONGO_URI);
-        console.log("✅ SUCCESS: Connected to MongoDB Atlas");
-    } catch (err) {
+mongoose.connect(process.env.MONGO_URI)
+    .then(() => console.log("✅ SUCCESS: Connected to MongoDB Atlas"))
+    .catch(err => {
         console.error("❌ DATABASE ERROR:", err.message);
         process.exit(1); 
-    }
-};
-connectDB();
+    });
 
 // --- SCHEMAS ---
 const userSchema = new mongoose.Schema({
@@ -35,7 +31,7 @@ const userSchema = new mongoose.Schema({
     password: { type: String, required: true }, 
     role: { type: String, default: 'user' },
     profilePic: { type: String, default: '' }
-});
+}, { timestamps: true });
 const User = mongoose.model('User', userSchema);
 
 const postSchema = new mongoose.Schema({
@@ -50,12 +46,10 @@ const postSchema = new mongoose.Schema({
       {
         username: String,
         text: String,
-        likes: { type: Array, default: [] },
         createdAt: { type: Date, default: Date.now }
       }
-    ],
-    createdAt: { type: Date, default: Date.now }
-});
+    ]
+}, { timestamps: true });
 const Post = mongoose.model('Post', postSchema);
 
 const blacklistSchema = new mongoose.Schema({
@@ -70,14 +64,20 @@ const Blacklist = mongoose.model('Blacklist', blacklistSchema);
 app.post('/api/signup', async (req, res) => {
     try {
         const { username, email, password } = req.body;
+        
         const isBanned = await Blacklist.findOne({ email: email.toLowerCase() });
         if (isBanned) return res.status(403).json({ message: "This email is blacklisted." });
 
         const existingUser = await User.findOne({ $or: [{ email: email.toLowerCase() }, { username }] });
         if (existingUser) return res.status(400).json({ message: "Username or Email already exists." });
         
-        const newUser = new User({ username, email, password });
+        // Hashing password
+        const salt = await bcrypt.genSalt(10);
+        const hashedPassword = await bcrypt.hash(password, salt);
+
+        const newUser = new User({ username, email, password: hashedPassword });
         await newUser.save();
+        
         const { password: _, ...userData } = newUser._doc;
         res.status(201).json(userData);
     } catch (err) {
@@ -89,7 +89,11 @@ app.post('/api/login', async (req, res) => {
     try {
         const { email, password } = req.body;
         const user = await User.findOne({ email: email.toLowerCase() });
-        if (!user || user.password !== password) return res.status(401).json({ message: "Invalid email or password." });
+        if (!user) return res.status(401).json({ message: "Invalid credentials." });
+
+        const isMatch = await bcrypt.compare(password, user.password);
+        if (!isMatch) return res.status(401).json({ message: "Invalid credentials." });
+
         const { password: _, ...userData } = user._doc;
         res.json(userData);
     } catch (err) {
@@ -98,15 +102,29 @@ app.post('/api/login', async (req, res) => {
 });
 
 // 2. USER MANAGEMENT
+// Optimized route for Home.jsx member counter
+app.get('/api/users/count', async (req, res) => {
+    try {
+        const count = await User.countDocuments();
+        res.json({ count });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 app.get('/api/users', async (req, res) => {
-    const users = await User.find({}, '-password');
+    const users = await User.find({}, '-password').sort({ createdAt: -1 });
     res.json(users);
 });
 
 app.put('/api/users/:id/role', async (req, res) => {
-    const { role } = req.body;
-    const user = await User.findByIdAndUpdate(req.params.id, { role }, { new: true });
-    res.json(user);
+    try {
+        const { role } = req.body;
+        const user = await User.findByIdAndUpdate(req.params.id, { role }, { new: true });
+        res.json(user);
+    } catch (err) {
+        res.status(400).json({ error: "Failed to update role" });
+    }
 });
 
 // 3. POSTS (CRUD)
@@ -116,9 +134,13 @@ app.get('/api/posts', async (req, res) => {
 });
 
 app.post('/api/posts', async (req, res) => {
-    const newPost = new Post(req.body);
-    await newPost.save();
-    res.status(201).json(newPost);
+    try {
+        const newPost = new Post(req.body);
+        await newPost.save();
+        res.status(201).json(newPost);
+    } catch (err) {
+        res.status(400).json({ error: "Failed to create post" });
+    }
 });
 
 app.put('/api/posts/:id', async (req, res) => {
@@ -135,6 +157,8 @@ app.delete('/api/posts/:id', async (req, res) => {
 app.post('/api/posts/:id/vote', async (req, res) => {
     const { username, voteType } = req.body;
     const post = await Post.findById(req.params.id);
+    if (!post) return res.status(404).send();
+
     if (voteType === 'up') {
         post.ups = post.ups.includes(username) ? post.ups.filter(u => u !== username) : [...post.ups, username];
         post.downs = post.downs.filter(u => u !== username);
@@ -168,13 +192,13 @@ app.get('/api/blacklist', async (req, res) => {
 
 app.post('/api/blacklist', async (req, res) => {
     const { email, userId } = req.body;
-    await Blacklist.create({ email });
+    await Blacklist.create({ email: email.toLowerCase() });
     if (userId) await User.findByIdAndDelete(userId);
     res.status(201).json({ message: "Banned" });
 });
 
 app.delete('/api/blacklist/:email', async (req, res) => {
-    await Blacklist.findOneAndDelete({ email: req.params.email });
+    await Blacklist.findOneAndDelete({ email: req.params.email.toLowerCase() });
     res.json({ message: "Unbanned" });
 });
 
