@@ -47,7 +47,6 @@ const postSchema = new mongoose.Schema({
     mediaType: String, 
     ups: { type: Array, default: [] },
     downs: { type: Array, default: [] },
-    // --- ADDED COMMENTS ARRAY ---
     comments: [
       {
         username: String,
@@ -64,18 +63,14 @@ const Post = mongoose.model('Post', postSchema);
 
 app.get('/', (req, res) => res.send("The Expose Backend is running!"));
 
+// 1. SIGNUP & LOGIN
 app.post('/api/signup', async (req, res) => {
     try {
         const { username, email, password } = req.body;
         const existingUser = await User.findOne({ $or: [{ email: email.toLowerCase() }, { username }] });
-        
-        if (existingUser) {
-            return res.status(400).json({ message: "Username or Email already exists." });
-        }
-
+        if (existingUser) return res.status(400).json({ message: "Username or Email already exists." });
         const newUser = new User({ username, email, password });
         await newUser.save();
-        
         const { password: _, ...userData } = newUser._doc;
         res.status(201).json(userData);
     } catch (err) {
@@ -87,11 +82,7 @@ app.post('/api/login', async (req, res) => {
     try {
         const { email, password } = req.body;
         const user = await User.findOne({ email: email.toLowerCase() });
-        
-        if (!user || user.password !== password) {
-            return res.status(401).json({ message: "Invalid email or password." });
-        }
-
+        if (!user || user.password !== password) return res.status(401).json({ message: "Invalid email or password." });
         const { password: _, ...userData } = user._doc;
         res.json(userData);
     } catch (err) {
@@ -99,6 +90,7 @@ app.post('/api/login', async (req, res) => {
     }
 });
 
+// 2. POSTS (GET & CREATE)
 app.get('/api/posts', async (req, res) => {
     try {
         const posts = await Post.find().sort({ createdAt: -1 });
@@ -118,13 +110,41 @@ app.post('/api/posts', async (req, res) => {
     }
 });
 
-// --- NEW: ADD A COMMENT ---
+// 3. VOTING (UP/DOWN)
+app.post('/api/posts/:id/vote', async (req, res) => {
+    try {
+        const { username, voteType } = req.body;
+        const post = await Post.findById(req.params.id);
+        if (!post) return res.status(404).json({ message: "Post not found" });
+
+        if (voteType === 'up') {
+            if (post.ups.includes(username)) {
+                post.ups = post.ups.filter(u => u !== username);
+            } else {
+                post.ups.push(username);
+                post.downs = post.downs.filter(u => u !== username);
+            }
+        } else {
+            if (post.downs.includes(username)) {
+                post.downs = post.downs.filter(u => u !== username);
+            } else {
+                post.downs.push(username);
+                post.ups = post.ups.filter(u => u !== username);
+            }
+        }
+        await post.save();
+        res.json(post);
+    } catch (err) {
+        res.status(400).json({ error: err.message });
+    }
+});
+
+// 4. COMMENTS & COMMENT LIKES
 app.post('/api/posts/:id/comment', async (req, res) => {
     try {
         const { username, text } = req.body;
         const post = await Post.findById(req.params.id);
         if (!post) return res.status(404).json({ message: "Post not found" });
-
         post.comments.push({ username, text, likes: [] });
         await post.save();
         res.status(201).json(post);
@@ -133,37 +153,24 @@ app.post('/api/posts/:id/comment', async (req, res) => {
     }
 });
 
-// --- NEW: LIKE/UNLIKE A COMMENT ---
 app.post('/api/posts/:id/comment/:index/like', async (req, res) => {
     try {
         const { username } = req.body;
         const post = await Post.findById(req.params.id);
         if (!post) return res.status(404).json({ message: "Post not found" });
-
         const comment = post.comments[req.params.index];
         if (!comment) return res.status(404).json({ message: "Comment not found" });
 
         const likeIndex = comment.likes.indexOf(username);
         if (likeIndex === -1) {
-            comment.likes.push(username); // Like
+            comment.likes.push(username);
         } else {
-            comment.likes.splice(likeIndex, 1); // Unlike
+            comment.likes.splice(likeIndex, 1);
         }
-
         await post.save();
         res.json(post);
     } catch (err) {
         res.status(400).json({ error: err.message });
-    }
-});
-
-app.get('/api/users/:username', async (req, res) => {
-    try {
-        const user = await User.findOne({ username: req.params.username });
-        if (!user) return res.status(404).json({ message: "User not found" });
-        res.json(user);
-    } catch (err) {
-        res.status(500).json({ error: err.message });
     }
 });
 
