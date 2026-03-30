@@ -1,7 +1,7 @@
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
-const bcrypt = require('bcryptjs'); // Better security for passwords
+const bcrypt = require('bcryptjs'); 
 require('dotenv').config();
 
 const app = express();
@@ -64,14 +64,12 @@ const Blacklist = mongoose.model('Blacklist', blacklistSchema);
 app.post('/api/signup', async (req, res) => {
     try {
         const { username, email, password } = req.body;
-        
         const isBanned = await Blacklist.findOne({ email: email.toLowerCase() });
         if (isBanned) return res.status(403).json({ message: "This email is blacklisted." });
 
         const existingUser = await User.findOne({ $or: [{ email: email.toLowerCase() }, { username }] });
         if (existingUser) return res.status(400).json({ message: "Username or Email already exists." });
         
-        // Hashing password
         const salt = await bcrypt.genSalt(10);
         const hashedPassword = await bcrypt.hash(password, salt);
 
@@ -102,7 +100,6 @@ app.post('/api/login', async (req, res) => {
 });
 
 // 2. USER MANAGEMENT
-// Optimized route for Home.jsx member counter
 app.get('/api/users/count', async (req, res) => {
     try {
         const count = await User.countDocuments();
@@ -115,6 +112,27 @@ app.get('/api/users/count', async (req, res) => {
 app.get('/api/users', async (req, res) => {
     const users = await User.find({}, '-password').sort({ createdAt: -1 });
     res.json(users);
+});
+
+// --- NEW PROFILE UPDATE ROUTE ---
+app.put('/api/users/:id', async (req, res) => {
+    try {
+        const { username, profilePic } = req.body;
+        
+        // Ensure username isn't taken by someone else
+        const existing = await User.findOne({ username, _id: { $ne: req.params.id } });
+        if (existing) return res.status(400).json({ message: "Username taken by another member." });
+
+        const updatedUser = await User.findByIdAndUpdate(
+            req.params.id, 
+            { username, profilePic }, 
+            { new: true }
+        ).select('-password');
+
+        res.json(updatedUser);
+    } catch (err) {
+        res.status(500).json({ message: "Server error during update." });
+    }
 });
 
 app.put('/api/users/:id/role', async (req, res) => {
