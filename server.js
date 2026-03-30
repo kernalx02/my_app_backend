@@ -9,7 +9,6 @@ const app = express();
 app.use(express.json()); 
 
 // --- CORS CONFIGURATION ---
-// Allows your Netlify frontend to communicate with this Render backend
 app.use(cors({
     origin: ["https://epcoran.netlify.app", "http://localhost:3000"],
     methods: ["GET", "POST", "PUT", "DELETE"],
@@ -33,7 +32,7 @@ connectDB();
 const userSchema = new mongoose.Schema({
     username: { type: String, required: true, unique: true },
     email: { type: String, required: true, unique: true, lowercase: true },
-    password: { type: String, required: true }, // Tip: Use bcrypt for hashing in the future
+    password: { type: String, required: true }, 
     role: { type: String, default: 'user' },
     profilePic: { type: String, default: '' },
     posts: { type: Array, default: [] }
@@ -48,16 +47,23 @@ const postSchema = new mongoose.Schema({
     mediaType: String, 
     ups: { type: Array, default: [] },
     downs: { type: Array, default: [] },
+    // --- ADDED COMMENTS ARRAY ---
+    comments: [
+      {
+        username: String,
+        text: String,
+        likes: { type: Array, default: [] },
+        createdAt: { type: Date, default: Date.now }
+      }
+    ],
     createdAt: { type: Date, default: Date.now }
 });
 const Post = mongoose.model('Post', postSchema);
 
 // --- ROUTES ---
 
-// Root Health Check
 app.get('/', (req, res) => res.send("The Expose Backend is running!"));
 
-// 1. SIGNUP ROUTE
 app.post('/api/signup', async (req, res) => {
     try {
         const { username, email, password } = req.body;
@@ -77,7 +83,6 @@ app.post('/api/signup', async (req, res) => {
     }
 });
 
-// 2. LOGIN ROUTE
 app.post('/api/login', async (req, res) => {
     try {
         const { email, password } = req.body;
@@ -94,7 +99,6 @@ app.post('/api/login', async (req, res) => {
     }
 });
 
-// 3. POSTS ROUTES
 app.get('/api/posts', async (req, res) => {
     try {
         const posts = await Post.find().sort({ createdAt: -1 });
@@ -114,6 +118,54 @@ app.post('/api/posts', async (req, res) => {
     }
 });
 
-// --- START SERVER ---
+// --- NEW: ADD A COMMENT ---
+app.post('/api/posts/:id/comment', async (req, res) => {
+    try {
+        const { username, text } = req.body;
+        const post = await Post.findById(req.params.id);
+        if (!post) return res.status(404).json({ message: "Post not found" });
+
+        post.comments.push({ username, text, likes: [] });
+        await post.save();
+        res.status(201).json(post);
+    } catch (err) {
+        res.status(400).json({ error: err.message });
+    }
+});
+
+// --- NEW: LIKE/UNLIKE A COMMENT ---
+app.post('/api/posts/:id/comment/:index/like', async (req, res) => {
+    try {
+        const { username } = req.body;
+        const post = await Post.findById(req.params.id);
+        if (!post) return res.status(404).json({ message: "Post not found" });
+
+        const comment = post.comments[req.params.index];
+        if (!comment) return res.status(404).json({ message: "Comment not found" });
+
+        const likeIndex = comment.likes.indexOf(username);
+        if (likeIndex === -1) {
+            comment.likes.push(username); // Like
+        } else {
+            comment.likes.splice(likeIndex, 1); // Unlike
+        }
+
+        await post.save();
+        res.json(post);
+    } catch (err) {
+        res.status(400).json({ error: err.message });
+    }
+});
+
+app.get('/api/users/:username', async (req, res) => {
+    try {
+        const user = await User.findOne({ username: req.params.username });
+        if (!user) return res.status(404).json({ message: "User not found" });
+        res.json(user);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`🚀 Server active on port ${PORT}`));
