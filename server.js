@@ -11,7 +11,7 @@ app.use(express.json());
 
 // --- CORS CONFIGURATION ---
 app.use(cors({
-    origin: ["https://clubtesting.netlify.app", "http://localhost:3000"],
+    origin: ["https://my-app-frontend-mu-gold.vercel.app", "http://localhost:3000"],
     methods: ["GET", "POST", "PUT", "DELETE"],
     credentials: true
 }));
